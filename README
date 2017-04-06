@@ -23,6 +23,7 @@ DEPENDENCIES
 This module requires these other modules and libraries:
 
   DateTime
+  DateTime::Duration
   DateTime::Set
   Set::Crontab
 

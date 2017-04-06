@@ -7,6 +7,6 @@ t/basic.t
 t/cascade.t
 t/cron.t
 t/crontab.t
+t/dst.t
 t/leapyear.t
 t/malformed.t
-META.yml                                 Module meta-data (added by MakeMaker)

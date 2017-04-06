@@ -13,6 +13,7 @@ use constant DEBUG => 0;
 
 use DateTime;
 use DateTime::Set;
+use DateTime::Duration;
 use Set::Crontab;
 
 my %Object_Attributes;
@@ -135,21 +136,19 @@ sub match {
 
 sub next {
   my($self, $date) = @_;
-  $date = DateTime->now unless $date;
-  $self->increment($date->clone);
+  $self->increment($date || DateTime->now);
 }
 
 sub previous {
   my($self, $date) = @_;
-  $date = DateTime->now unless $date;
-  $self->decrement($date->clone);
+  $self->decrement($date || DateTime->now);
 }
 
 ### Change given date to adjacent dates
 
 sub increment {
   my($self, $date) = @_;
-  $date = DateTime->now unless $date;
+  $date = $date ? $date->clone : DateTime->now;
   return $date if $date->is_infinite;
   do {
     $self->_attempt_increment($date);
@@ -159,7 +158,7 @@ sub increment {
 
 sub decrement {
   my($self, $date) = @_;
-  $date = DateTime->now unless $date;
+  $date = $date ? $date->clone : DateTime->now;
   return $date if $date->is_infinite;
   do {
     $self->_attempt_decrement($date);
@@ -185,9 +184,9 @@ sub _attempt_decrement {
     $self->_invalid_decr($date);
 }
 
-sub _valid_incr { shift->_minute_incr(@_) }
+sub _valid_incr { shift->_incr(@_) }
 
-sub _valid_decr { shift->_minute_decr(@_) }
+sub _valid_decr { shift->_decr(@_) }
 
 sub _invalid_incr {
   # If provided date is valid, return it. Otherwise return
@@ -317,56 +316,110 @@ sub _unit_peak {
        ->subtract(minutes => 1);
 }
 
+sub _next_day {
+  my($self, $year, $mon, $day) = @_;
+  my $dt = DateTime->new(year => $year, month => $mon, day => $day);
+  my $dur = DateTime::Duration->new(days => 1);
+  $dt->add_duration($dur);
+  while (! $self->days_contain($dt->day, $dt->day_of_week)) {
+    $dt->add_duration($dur);
+  }
+  $dt->day;
+}
+
+sub _prev_day {
+  my($self, $year, $mon, $day) = @_;
+  my $dt = DateTime->new(year => $year, month => $mon, day => $day);
+  my $dur = DateTime::Duration->new(days => 1);
+  $dt->subtract_duration($dur);
+  while (! $self->days_contain($dt->day, $dt->day_of_week)) {
+    $dt->subtract_duration($dur);
+  }
+  $dt->day;
+}
+
 ### Unit cascades
 
-sub _minute_incr {
+sub _incr {
   my($self, $date) = @_;
-  croak "datetime object required\n" unless $date;
-  my $cur = $date->minute;
-  my $next = $self->minute->next($cur);
-  $date->set(minute => $next);
-  $next <= $cur ? $self->_hour_incr($date) : $date;
+  my $last_min   = $date->minute;
+  my $last_hour  = $date->hour;
+  my $last_day   = $date->day;
+  my $last_month = $date->month;
+  my $year       = $date->year;
+  my($next_min, $next_hour, $next_day, $next_month) =
+    ($last_min, $last_hour, $last_day, $last_month);
+  while (1) {
+    $next_min = $self->minute->next($last_min);
+    if ($next_min <= $last_min) {
+      $next_hour = $self->hour->next($last_hour);
+      if ($next_hour <= $last_hour) {
+        eval { $next_day = $self->_next_day($year, $last_month, $last_day) };
+        if ($next_day <= $last_day || $@) {
+          $next_month = $self->month->next($last_month);
+          if ($next_month <= $last_month) {
+            $year += 1;
+          }
+          $last_month = $next_month;
+        }
+        $last_day = $next_day;
+      }
+      $last_hour = $next_hour;
+    }
+    $last_min = $next_min;
+    eval {
+      $date->set(
+        minute => $next_min,
+        hour   => $next_hour,
+        day    => $next_day,
+        month  => $next_month,
+        year   => $year,
+      );
+    };
+    last unless $@;
+  }
+  $date;
 }
 
-sub _hour_incr {
+sub _decr {
   my($self, $date) = @_;
-  croak "datetime object required\n" unless $date;
-  my $cur = $date->hour;
-  my $next = $self->hour->next($cur);
-  $date->set(hour => $next);
-  $next <= $cur ? $self->_day_incr($date) : $date;
-}
-
-sub _day_incr {
-  my($self, $date) = @_;
-  croak "datetime object required\n" unless $date;
-  $date->add(days => 1);
-  $self->_invalid_incr($date);
-}
-
-sub _minute_decr {
-  my($self, $date) = @_;
-  croak "datetime object required\n" unless $date;
-  my $cur = $date->minute;
-  my $next = $self->minute->previous($cur);
-  $date->set(minute => $next);
-  $next >= $cur ? $self->_hour_decr($date) : $date;
-}
-
-sub _hour_decr {
-  my($self, $date) = @_;
-  croak "datetime object required\n" unless $date;
-  my $cur = $date->hour;
-  my $next = $self->hour->previous($cur);
-  $date->set(hour => $next);
-  $next >= $cur ? $self->_day_decr($date) : $date;
-}
-
-sub _day_decr {
-  my($self, $date) = @_;
-  croak "datetime object required\n" unless $date;
-  $date->subtract(days => 1);
-  $self->_invalid_decr($date);
+  my $last_min   = $date->minute;
+  my $last_hour  = $date->hour;
+  my $last_day   = $date->day;
+  my $last_month = $date->month;
+  my $year       = $date->year;
+  my($prev_min, $prev_hour, $prev_day, $prev_month) =
+    ($last_min, $last_hour, $last_day, $last_month);
+  while (1) {
+    $prev_min = $self->minute->previous($last_min);
+    if ($prev_min >= $last_min) {
+      $prev_hour = $self->hour->previous($last_hour);
+      if ($prev_hour >= $last_hour) {
+        eval { $prev_day = $self->_prev_day($year, $last_month, $last_day) };
+        if ($prev_day >= $last_day || $@) {
+          $prev_month = $self->month->previous($last_month);
+          if ($prev_month >= $last_month) {
+            $year -= 1;
+          }
+          $last_month = $prev_month;
+        }
+        $last_day = $prev_day;
+      }
+      $last_hour = $prev_hour;
+    }
+    $last_min = $prev_min;
+    eval {
+      $date->set(
+        minute => $prev_min,
+        hour   => $prev_hour,
+        day    => $prev_day,
+        month  => $prev_month,
+        year   => $year,
+      );
+    };
+    last unless $@;
+  }
+  $date;
 }
 
 ### Factories
@@ -379,7 +432,7 @@ sub days_contain { shift->_cronset->days_contain(@_) }
 
 sub minute   { shift->_cronset->minute  }
 sub hour     { shift->_cronset->hour    }
-sub day      { shift->_cronset->day     }
+sub dom      { shift->_cronset->dom     }
 sub month    { shift->_cronset->month   }
 sub dow      { shift->_cronset->dow     }
 sub user     { shift->_cronset->user    }
@@ -403,7 +456,7 @@ sub _attr {
 
 sub _dump_sets {
   my($self, $date) = @_;
-  foreach (qw(minute hour day month dow)) {
+  foreach (qw(minute hour dom month dow)) {
     print STDERR "$_: ", join(',',$self->$_->list), "\n";
   }
   if (ref $date) {
@@ -435,9 +488,9 @@ package DateTime::Event::Cron::IntegratedSet;
 # IntegratedSet manages the collection of field sets for
 # each cron entry, including sanity checks. Individual
 # field sets are accessed through their respective names,
-# i.e., minute hour day month dow.
+# i.e., minute hour dom month dow.
 #
-# Also implements some merged field logic for day/dow
+# Also implements some merged field logic for dom/dow
 # interactions.
 
 use strict;
@@ -446,7 +499,7 @@ use Carp;
 my %Range = (
   minute => [0..59],
   hour   => [0..23],
-  day    => [1..31],
+  dom    => [1..31],
   month  => [1..12],
   dow    => [1..7],
 );
@@ -494,23 +547,23 @@ sub set_cron {
   $self->_attr('command', $command);
   $self->_attr('user', $user);
   my $i = 0;
-  foreach my $name (qw( minute hour day month dow )) {
+  foreach my $name (qw( minute hour dom month dow )) {
     $self->_attr($name, $self->make_valid_set($name, $entry[$i]));
     ++$i;
   }
-  my @day_list  = $self->day->list;
+  my @dom_list  = $self->dom->list;
   my @dow_list  = $self->dow->list;
-  my $day_range = $self->range('day');
+  my $dom_range = $self->range('dom');
   my $dow_range = $self->range('dow');
-  $self->day_squelch(scalar @day_list == scalar @$day_range &&
+  $self->dom_squelch(scalar @dom_list == scalar @$dom_range &&
                      scalar @dow_list != scalar @$dow_range ? 1 : 0);
   $self->dow_squelch(scalar @dow_list == scalar @$dow_range &&
-                     scalar @day_list != scalar @$day_range ? 1 : 0);
-  unless ($self->day_squelch) {
-    my @days = $self->day->list;
+                     scalar @dom_list != scalar @$dom_range ? 1 : 0);
+  unless ($self->dom_squelch) {
+    my @doms = $self->dom->list;
     my $pass = 0;
     MONTH: foreach my $month ($self->month->list) {
-      foreach (@days) {
+      foreach (@doms) {
         ++$pass && last MONTH if $_ <= $Month_Max[$month - 1];
       }
     }
@@ -548,26 +601,26 @@ sub make_valid_set {
 # No sanity checks
 sub make_set { shift; DateTime::Event::Cron::OrderedSet->new(@_) }
 
-# Flags for when day/dow are applied.
-sub day_squelch { shift->_attr('day_squelch', @_ ) }
+# Flags for when dom/dow are applied.
+sub dom_squelch { shift->_attr('dom_squelch', @_ ) }
 sub dow_squelch { shift->_attr('dow_squelch', @_ ) }
 
-# Merged logic for day/dow
+# Merged logic for dom/dow
 sub days_contain {
-  my($self, $day, $dow) = @_;
-  defined $day && defined $dow
+  my($self, $dom, $dow) = @_;
+  defined $dom && defined $dow
     or croak "Day of month and day of week required.\n";
-  my $day_c = $self->day->contains($day);
+  my $dom_c = $self->dom->contains($dom);
   my $dow_c = $self->dow->contains($dow);
-  return $dow_c if $self->day_squelch;
-  return $day_c if $self->dow_squelch;
-  $day_c || $dow_c;
+  return $dow_c if $self->dom_squelch;
+  return $dom_c if $self->dow_squelch;
+  $dom_c || $dow_c;
 }
 
 # Set Accessors
 sub minute   { shift->_attr('minute' ) }
 sub hour     { shift->_attr('hour'   ) }
-sub day      { shift->_attr('day'    ) }
+sub dom      { shift->_attr('dom'    ) }
 sub month    { shift->_attr('month'  ) }
 sub dow      { shift->_attr('dow'    ) }
 sub user     { shift->_attr('user'   ) }
