@@ -1,5 +1,9 @@
 Revision history:
 
+0.09  Thu Apr  6 14:36:36 EDT 2017
+    - refactored increment/decrement in order to properly
+      handle DST transitions as perl RT #120789
+
 0.08  Thu Jun 10 16:54:11 EDT 2010
     - Added match() for checking cron hits
 
